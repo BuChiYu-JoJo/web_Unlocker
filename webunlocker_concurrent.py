@@ -1,0 +1,247 @@
+import csv
+import json
+import math
+import random
+import threading
+import time
+from argparse import ArgumentParser
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Any, Dict, Iterable, List
+from urllib.parse import urlencode
+import http.client
+
+# ================== 配置区域 ==================
+# 需要随机请求的 URL 列表（无需命令行传入）
+URLS = [
+    "https://www.google.com",
+    "https://senado.gob.mx",
+    "https://t.me",
+    "https://hipervarejo.com.br",
+]
+
+# 并发数量（默认值，可通过命令行参数覆盖，支持一次传多个并发依次执行）
+CONCURRENCY_LIST = [5]
+
+# 每个并发配置下的请求总数（可通过命令行参数覆盖）
+TOTAL_REQUESTS = 20
+
+# 结果输出目录
+OUTPUT_DIR = Path("webunlocker_results")
+
+# Web Unlocker 接口配置
+BASE_HOST = "webunlocker.thordata.com"
+AUTHORIZATION = "Bearer e75dec18487d038d55b8f6995e3c5f4b"
+# =============================================
+
+
+def do_request(url: str) -> Dict[str, Any]:
+    start = time.perf_counter()
+    http_status = None
+    http_reason = None
+    body = b""
+
+    payload = {
+        "url": url,
+        "type": "html",
+        "js_render": "True",
+    }
+
+    try:
+        conn = http.client.HTTPSConnection(BASE_HOST, timeout=60)
+        form_data = urlencode(payload)
+        headers = {
+            "Authorization": AUTHORIZATION,
+            "content-type": "application/x-www-form-urlencoded",
+        }
+        conn.request("POST", "/request", form_data, headers)
+        response = conn.getresponse()
+        http_status = response.status
+        http_reason = response.reason
+        body = response.read()
+    except Exception as exc:  # 网络或接口异常
+        duration = time.perf_counter() - start
+        return {
+            "url": url,
+            "response_time_s": round(duration, 4),
+            "http_status": http_status if http_status is not None else "n/a",
+            "payload_status": "n/a",
+            "success": False,
+            "interface_error_code": http_status if http_status is not None else "n/a",
+            "payload_error_code": "",
+            "error_notes": f"Interface error: {exc}",
+            "response_size_kb": round(len(body) / 1024, 4) if body else 0.0,
+        }
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    duration = time.perf_counter() - start
+    payload_status: Any = "n/a"
+    payload_error_code: Any = ""
+    error_notes = ""
+    success = False
+    response_time = duration
+
+    try:
+        payload_json = json.loads(body.decode("utf-8")) if body else {}
+        payload_status = payload_json.get("code", "n/a")
+        payload_error_code = payload_status if payload_status != 200 else ""
+
+        # 优先使用接口返回的 response_time
+        response_time_field = payload_json.get("response_time")
+        if response_time_field is not None:
+            try:
+                response_time = float(response_time_field)
+            except (TypeError, ValueError):
+                response_time = duration
+
+        if http_status == 200 and payload_status == 200:
+            success = True
+        else:
+            if http_status != 200:
+                error_notes = f"Interface error: {http_reason}"
+            elif payload_status != 200:
+                error_detail = payload_json.get("data")
+                if error_detail is None:
+                    error_detail = payload_json
+                error_notes = f"Payload error: {error_detail}"
+    except Exception as exc:
+        payload_status = "invalid_json"
+        payload_error_code = "invalid_json"
+        error_notes = f"Response parse error: {exc}"
+
+    return {
+        "url": url,
+        "response_time_s": round(response_time, 4),
+        "http_status": http_status,
+        "payload_status": payload_status,
+        "success": success,
+        "interface_error_code": "" if (success or http_status == 200) else http_status,
+        "payload_error_code": "" if success else payload_error_code,
+        "error_notes": error_notes,
+        "response_size_kb": round(len(body) / 1024, 4),
+    }
+
+
+def percentile(values: List[float], pct: int) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    idx = math.ceil(len(sorted_values) * pct / 100) - 1
+    idx = max(0, min(idx, len(sorted_values) - 1))
+    return round(sorted_values[idx], 4)
+
+
+def save_csv(path: Path, rows: List[Dict[str, Any]], headers: List[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Path]:
+    results: List[Dict[str, Any]] = []
+    lock = threading.Lock()
+
+    def worker_task() -> None:
+        url = random.choice(urls)
+        result = do_request(url)
+        with lock:
+            results.append(result)
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [executor.submit(worker_task) for _ in range(total_requests)]
+        for future in as_completed(futures):
+            future.result()
+
+    # 写入详细请求结果
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    detail_path = OUTPUT_DIR / f"request_details_c{concurrency}_{timestamp}.csv"
+    save_csv(
+        detail_path,
+        results,
+        headers=[
+            "url",
+            "response_time_s",
+            "http_status",
+            "payload_status",
+            "success",
+            "interface_error_code",
+            "payload_error_code",
+            "error_notes",
+            "response_size_kb",
+        ],
+    )
+
+    # 统计成功请求
+    success_rows = [row for row in results if row.get("success")]
+    success_times = [row["response_time_s"] for row in success_rows]
+    success_sizes = [row["response_size_kb"] for row in success_rows]
+
+    total = len(results)
+    success_count = len(success_rows)
+    success_rate = (success_count / total) if total else 0.0
+    error_rate = 1 - success_rate if total else 0.0
+
+    stats_row = {
+        "concurrency": concurrency,
+        "total_requests": total,
+        "success_rate": round(success_rate, 4),
+        "error_rate": round(error_rate, 4),
+        "success_avg_response_time_s": round(sum(success_times) / success_count, 4) if success_times else 0.0,
+        "success_avg_response_size_kb": round(sum(success_sizes) / success_count, 4) if success_sizes else 0.0,
+        "p50": percentile(success_times, 50),
+        "p75": percentile(success_times, 75),
+        "p90": percentile(success_times, 90),
+        "p95": percentile(success_times, 95),
+        "p99": percentile(success_times, 99),
+    }
+
+    stats_path = OUTPUT_DIR / f"request_stats_c{concurrency}_{timestamp}.csv"
+    save_csv(
+        stats_path,
+        [stats_row],
+        headers=[
+            "concurrency",
+            "total_requests",
+            "success_rate",
+            "error_rate",
+            "success_avg_response_time_s",
+            "success_avg_response_size_kb",
+            "p50",
+            "p75",
+            "p90",
+            "p95",
+            "p99",
+        ],
+    )
+
+    print(f"并发 {concurrency} 完成: 详细请求结果 -> {detail_path}")
+    print(f"并发 {concurrency} 完成: 统计结果 -> {stats_path}")
+
+    return {"detail": detail_path, "stats": stats_path}
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser(description="Web Unlocker 并发请求脚本")
+    parser.add_argument(
+        "--concurrency",
+        nargs="+",
+        type=int,
+        help="一个或多个并发值，依次执行（例如: --concurrency 5 10 20）",
+    )
+    parser.add_argument(
+        "--requests",
+        type=int,
+        default=TOTAL_REQUESTS,
+        help="每个并发设置下的请求总数",
+    )
+    args = parser.parse_args()
+
+    concurrency_values: Iterable[int] = args.concurrency if args.concurrency else CONCURRENCY_LIST
+    for c in concurrency_values:
+        run(c, args.requests, URLS)

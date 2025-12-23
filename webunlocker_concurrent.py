@@ -62,15 +62,15 @@ def do_request(url: str) -> Dict[str, Any]:
     except Exception as exc:  # 网络或接口异常
         duration = time.perf_counter() - start
         return {
-            "url": url,
-            "response_time_s": round(duration, 4),
-            "http_status": http_status if http_status is not None else "n/a",
-            "payload_status": "n/a",
-            "success": False,
-            "interface_error_code": http_status if http_status is not None else "n/a",
-            "payload_error_code": "",
-            "error_notes": f"Interface error: {exc}",
-            "response_size_kb": round(len(body) / 1024, 4) if body else 0.0,
+            "请求URL": url,
+            "响应时间(s)": round(duration, 4),
+            "接口状态码": http_status if http_status is not None else "n/a",
+            "响应内容状态码": "n/a",
+            "是否成功": False,
+            "接口错误码": http_status if http_status is not None else "n/a",
+            "响应内容错误码": "",
+            "错误备注": f"Interface error: {exc}",
+            "响应文件大小(KB)": round(len(body) / 1024, 4) if body else 0.0,
         }
     finally:
         try:
@@ -114,15 +114,15 @@ def do_request(url: str) -> Dict[str, Any]:
         error_notes = f"Response parse error: {exc}"
 
     return {
-        "url": url,
-        "response_time_s": round(response_time, 4),
-        "http_status": http_status,
-        "payload_status": payload_status,
-        "success": success,
-        "interface_error_code": "" if (success or http_status == 200) else http_status,
-        "payload_error_code": "" if success else payload_error_code,
-        "error_notes": error_notes,
-        "response_size_kb": round(len(body) / 1024, 4),
+        "请求URL": url,
+        "响应时间(s)": round(response_time, 4),
+        "接口状态码": http_status,
+        "响应内容状态码": payload_status,
+        "是否成功": success,
+        "接口错误码": "" if (success or http_status == 200) else http_status,
+        "响应内容错误码": "" if success else payload_error_code,
+        "错误备注": error_notes,
+        "响应文件大小(KB)": round(len(body) / 1024, 4),
     }
 
 
@@ -165,40 +165,43 @@ def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Pat
         detail_path,
         results,
         headers=[
-            "url",
-            "response_time_s",
-            "http_status",
-            "payload_status",
-            "success",
-            "interface_error_code",
-            "payload_error_code",
-            "error_notes",
-            "response_size_kb",
+            "请求URL",
+            "响应时间(s)",
+            "接口状态码",
+            "响应内容状态码",
+            "是否成功",
+            "接口错误码",
+            "响应内容错误码",
+            "错误备注",
+            "响应文件大小(KB)",
         ],
     )
 
     # 统计成功请求
-    success_rows = [row for row in results if row.get("success")]
-    success_times = [row["response_time_s"] for row in success_rows]
-    success_sizes = [row["response_size_kb"] for row in success_rows]
+    success_rows = [row for row in results if row.get("是否成功")]
+    success_times = [row["响应时间(s)"] for row in success_rows]
+    success_sizes = [row["响应文件大小(KB)"] for row in success_rows]
 
     total = len(results)
     success_count = len(success_rows)
+    error_count = total - success_count
     success_rate = (success_count / total) if total else 0.0
     error_rate = 1 - success_rate if total else 0.0
 
     stats_row = {
-        "concurrency": concurrency,
-        "total_requests": total,
-        "success_rate": round(success_rate, 4),
-        "error_rate": round(error_rate, 4),
-        "success_avg_response_time_s": round(sum(success_times) / success_count, 4) if success_times else 0.0,
-        "success_avg_response_size_kb": round(sum(success_sizes) / success_count, 4) if success_sizes else 0.0,
-        "p50": percentile(success_times, 50),
-        "p75": percentile(success_times, 75),
-        "p90": percentile(success_times, 90),
-        "p95": percentile(success_times, 95),
-        "p99": percentile(success_times, 99),
+        "并发数": concurrency,
+        "请求总数": total,
+        "成功请求数": success_count,
+        "错误请求数": error_count,
+        "成功率": round(success_rate, 4),
+        "错误率": round(error_rate, 4),
+        "成功平均响应时间(s)": round(sum(success_times) / success_count, 4) if success_times else 0.0,
+        "成功平均响应大小(KB)": round(sum(success_sizes) / success_count, 4) if success_sizes else 0.0,
+        "P50响应时间(s)": percentile(success_times, 50),
+        "P75响应时间(s)": percentile(success_times, 75),
+        "P90响应时间(s)": percentile(success_times, 90),
+        "P95响应时间(s)": percentile(success_times, 95),
+        "P99响应时间(s)": percentile(success_times, 99),
     }
 
     stats_path = OUTPUT_DIR / f"request_stats_c{concurrency}_{timestamp}.csv"
@@ -206,17 +209,19 @@ def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Pat
         stats_path,
         [stats_row],
         headers=[
-            "concurrency",
-            "total_requests",
-            "success_rate",
-            "error_rate",
-            "success_avg_response_time_s",
-            "success_avg_response_size_kb",
-            "p50",
-            "p75",
-            "p90",
-            "p95",
-            "p99",
+            "并发数",
+            "请求总数",
+            "成功请求数",
+            "错误请求数",
+            "成功率",
+            "错误率",
+            "成功平均响应时间(s)",
+            "成功平均响应大小(KB)",
+            "P50响应时间(s)",
+            "P75响应时间(s)",
+            "P90响应时间(s)",
+            "P95响应时间(s)",
+            "P99响应时间(s)",
         ],
     )
 

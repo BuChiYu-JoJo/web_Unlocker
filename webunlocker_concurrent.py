@@ -6,6 +6,7 @@ import threading
 import time
 from argparse import ArgumentParser
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 from urllib.parse import urlencode
@@ -37,6 +38,7 @@ AUTHORIZATION = "Bearer e75dec18487d038d55b8f6995e3c5f4b"
 
 def do_request(url: str) -> Dict[str, Any]:
     start = time.perf_counter()
+    started_at = datetime.now().isoformat()
     http_status = None
     http_reason = None
     body = b""
@@ -62,6 +64,7 @@ def do_request(url: str) -> Dict[str, Any]:
     except Exception as exc:  # 网络或接口异常
         duration = time.perf_counter() - start
         return {
+            "请求时间": started_at,
             "请求URL": url,
             "响应时间(s)": round(duration, 4),
             "接口状态码": http_status if http_status is not None else "n/a",
@@ -114,6 +117,7 @@ def do_request(url: str) -> Dict[str, Any]:
         error_notes = f"Response parse error: {exc}"
 
     return {
+        "请求时间": started_at,
         "请求URL": url,
         "响应时间(s)": round(response_time, 4),
         "接口状态码": http_status,
@@ -153,10 +157,13 @@ def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Pat
         with lock:
             results.append(result)
 
+    exec_start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = [executor.submit(worker_task) for _ in range(total_requests)]
         for future in as_completed(futures):
             future.result()
+    exec_end = time.perf_counter()
+    exec_duration = exec_end - exec_start
 
     # 写入详细请求结果
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -165,6 +172,7 @@ def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Pat
         detail_path,
         results,
         headers=[
+            "请求时间",
             "请求URL",
             "响应时间(s)",
             "接口状态码",
@@ -187,9 +195,11 @@ def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Pat
     error_count = total - success_count
     success_rate = (success_count / total) if total else 0.0
     error_rate = 1 - success_rate if total else 0.0
+    qps = (total / exec_duration) if exec_duration > 0 else 0.0
 
     stats_row = {
         "并发数": concurrency,
+        "QPS": round(qps, 4),
         "请求总数": total,
         "成功请求数": success_count,
         "错误请求数": error_count,
@@ -202,6 +212,7 @@ def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Pat
         "P90响应时间(s)": percentile(success_times, 90),
         "P95响应时间(s)": percentile(success_times, 95),
         "P99响应时间(s)": percentile(success_times, 99),
+        "并发完成时间(s)": round(exec_duration, 4),
     }
 
     stats_path = OUTPUT_DIR / f"request_stats_c{concurrency}_{timestamp}.csv"
@@ -210,6 +221,7 @@ def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Pat
         [stats_row],
         headers=[
             "并发数",
+            "QPS",
             "请求总数",
             "成功请求数",
             "错误请求数",
@@ -222,6 +234,7 @@ def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Pat
             "P90响应时间(s)",
             "P95响应时间(s)",
             "P99响应时间(s)",
+            "并发完成时间(s)",
         ],
     )
 

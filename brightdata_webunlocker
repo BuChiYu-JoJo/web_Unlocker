@@ -1,0 +1,19 @@
+import requests
+
+url = "https://api.brightdata.com/request"
+
+payload = {
+    "zone": "web_unlocker2",
+    "url": "https://www.google.com",
+    "format": "json",
+    "method": "GET",
+    "direct": False
+}
+headers = {
+    "Authorization": "Bearer 6c62b12c481a172f51629ed915ae0bd7f43eff9794aa391505bc354b154f339a",
+    "Content-Type": "application/json"
+}
+
+response = requests.request("POST", url, json=payload, headers=headers)
+
+print(response.text)

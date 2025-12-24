@@ -196,7 +196,13 @@ def do_request(url: str) -> Dict[str, Any]:
                 response_time = duration
 
         html_content = payload_json.get("html")
-        if http_status == 200 and payload_status == 200 and html_content:
+        response_size_kb = len(body) / 1024 if body else 0.0
+        if (
+            http_status == 200
+            and payload_status == 200
+            and html_content
+            and response_size_kb >= 2.0
+        ):
             success = True
         else:
             if http_status != 200:
@@ -209,6 +215,9 @@ def do_request(url: str) -> Dict[str, Any]:
             elif not html_content:
                 payload_error_code = "empty_html"
                 error_notes = "Payload error: html is empty"
+            elif response_size_kb < 2.0:
+                payload_error_code = "response_too_small"
+                error_notes = "Payload error: response size < 2KB"
     except Exception as exc:
         payload_status = "invalid_json"
         payload_error_code = "invalid_json"

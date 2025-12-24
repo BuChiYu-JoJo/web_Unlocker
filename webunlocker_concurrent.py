@@ -241,7 +241,7 @@ def save_csv(path: Path, rows: List[Dict[str, Any]], headers: List[str]) -> None
         writer.writerows(rows)
 
 
-def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Path]:
+def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Any]:
     results: List[Dict[str, Any]] = []
     lock = threading.Lock()
 
@@ -335,7 +335,7 @@ def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Pat
     print(f"并发 {concurrency} 完成: 详细请求结果 -> {detail_path}")
     print(f"并发 {concurrency} 完成: 统计结果 -> {stats_path}")
 
-    return {"detail": detail_path, "stats": stats_path}
+    return {"detail": detail_path, "stats": stats_path, "stats_row": stats_row}
 
 
 if __name__ == "__main__":
@@ -354,6 +354,37 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    concurrency_values: Iterable[int] = args.concurrency if args.concurrency else CONCURRENCY_LIST
+    concurrency_values: List[int] = (
+        list(args.concurrency) if args.concurrency else list(CONCURRENCY_LIST)
+    )
+    summary_timestamp = time.strftime("%Y%m%d_%H%M%S")
+    summary_rows: List[Dict[str, Any]] = []
+
     for c in concurrency_values:
-        run(c, args.requests, URLS)
+        result = run(c, args.requests, URLS)
+        summary_rows.append(result["stats_row"])
+
+    if len(summary_rows) > 1:
+        summary_path = OUTPUT_DIR / f"request_stats_summary_{summary_timestamp}.csv"
+        save_csv(
+            summary_path,
+            summary_rows,
+            headers=[
+                "并发数",
+                "QPS",
+                "请求总数",
+                "成功请求数",
+                "错误请求数",
+                "成功率",
+                "错误率",
+                "成功平均响应时间(s)",
+                "成功平均响应大小(KB)",
+                "P50响应时间(s)",
+                "P75响应时间(s)",
+                "P90响应时间(s)",
+                "P95响应时间(s)",
+                "P99响应时间(s)",
+                "并发完成时间(s)",
+            ],
+        )
+        print(f"汇总统计结果 -> {summary_path}")

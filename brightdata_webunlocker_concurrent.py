@@ -120,9 +120,6 @@ CONCURRENCY_LIST = [5]
 # 每个并发配置下的请求总数（可通过命令行参数覆盖）
 TOTAL_REQUESTS = 500
 
-# 每个 URL 的请求次数（可通过命令行参数覆盖）
-REQUESTS_PER_URL = 10
-
 # 结果输出目录
 OUTPUT_DIR = Path("brightdata_results")
 
@@ -256,22 +253,19 @@ def save_csv(path: Path, rows: List[Dict[str, Any]], headers: List[str]) -> None
         writer.writerows(rows)
 
 
-def run(concurrency: int, per_url: int, urls: List[str]) -> Dict[str, Any]:
+def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Any]:
     results: List[Dict[str, Any]] = []
     lock = threading.Lock()
-    request_urls = [url for url in urls for _ in range(per_url)]
-    random.shuffle(request_urls)
 
-    def worker_task(request_url: str) -> None:
-        result = do_request(request_url)
+    def worker_task() -> None:
+        url = random.choice(urls)
+        result = do_request(url)
         with lock:
             results.append(result)
 
     exec_start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = [
-            executor.submit(worker_task, request_url) for request_url in request_urls
-        ]
+        futures = [executor.submit(worker_task) for _ in range(total_requests)]
         for future in as_completed(futures):
             future.result()
     exec_end = time.perf_counter()
@@ -367,27 +361,21 @@ if __name__ == "__main__":
         help="一个或多个并发值，依次执行（例如: --concurrency 5 10 20）",
     )
     parser.add_argument(
-        "--per-url",
-        type=int,
-        default=REQUESTS_PER_URL,
-        help="每个 URL 的请求次数",
-    )
-    parser.add_argument(
         "--requests",
         type=int,
-        help="兼容旧参数：等同于 --per-url",
+        default=TOTAL_REQUESTS,
+        help="每个并发设置下的请求总数",
     )
     args = parser.parse_args()
 
     concurrency_values: List[int] = (
         list(args.concurrency) if args.concurrency else list(CONCURRENCY_LIST)
     )
-    per_url = args.requests if args.requests is not None else args.per_url
     summary_timestamp = time.strftime("%Y%m%d_%H%M%S")
     summary_rows: List[Dict[str, Any]] = []
 
     for c in concurrency_values:
-        result = run(c, per_url, URLS)
+        result = run(c, args.requests, URLS)
         summary_rows.append(result["stats_row"])
 
     if len(summary_rows) > 1:

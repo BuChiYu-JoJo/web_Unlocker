@@ -195,7 +195,8 @@ def do_request(url: str) -> Dict[str, Any]:
             except (TypeError, ValueError):
                 response_time = duration
 
-        if http_status == 200 and payload_status == 200:
+        html_content = payload_json.get("html")
+        if http_status == 200 and payload_status == 200 and html_content:
             success = True
         else:
             if http_status != 200:
@@ -205,6 +206,9 @@ def do_request(url: str) -> Dict[str, Any]:
                 if error_detail is None:
                     error_detail = payload_json
                 error_notes = f"Payload error: {error_detail}"
+            elif not html_content:
+                payload_error_code = "empty_html"
+                error_notes = "Payload error: html is empty"
     except Exception as exc:
         payload_status = "invalid_json"
         payload_error_code = "invalid_json"

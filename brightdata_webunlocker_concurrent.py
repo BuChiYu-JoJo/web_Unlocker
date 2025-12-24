@@ -120,6 +120,9 @@ CONCURRENCY_LIST = [5]
 # 每个并发配置下的请求总数（可通过命令行参数覆盖）
 TOTAL_REQUESTS = 500
 
+# 每个 URL 的请求次数（可通过命令行参数覆盖）
+REQUESTS_PER_URL = 10
+
 # 结果输出目录
 OUTPUT_DIR = Path("brightdata_results")
 
@@ -186,6 +189,8 @@ def do_request(url: str) -> Dict[str, Any]:
         payload_json = json.loads(body_text) if body_text else {}
         payload_status = payload_json.get("status_code", "n/a")
         payload_error_code = payload_status if payload_status != 200 else ""
+        body_content = payload_json.get("body")
+        response_size_kb = len(body_text.encode("utf-8")) / 1024 if body_text else 0.0
 
         response_time_field = payload_json.get("response_time")
         if response_time_field is not None:
@@ -194,7 +199,12 @@ def do_request(url: str) -> Dict[str, Any]:
             except (TypeError, ValueError):
                 response_time = duration
 
-        if http_status == 200 and payload_status == 200:
+        if (
+            http_status == 200
+            and payload_status == 200
+            and body_content
+            and response_size_kb > 2.0
+        ):
             success = True
         else:
             if http_status != 200:
@@ -204,6 +214,12 @@ def do_request(url: str) -> Dict[str, Any]:
                 if error_detail is None:
                     error_detail = payload_json
                 error_notes = f"Payload error: {error_detail}"
+            elif not body_content:
+                payload_error_code = "empty_body"
+                error_notes = "Payload error: body is empty"
+            elif response_size_kb <= 2.0:
+                payload_error_code = "response_too_small"
+                error_notes = "Payload error: response size <= 2KB"
     except Exception as exc:
         payload_status = "invalid_json"
         payload_error_code = "invalid_json"
@@ -240,19 +256,22 @@ def save_csv(path: Path, rows: List[Dict[str, Any]], headers: List[str]) -> None
         writer.writerows(rows)
 
 
-def run(concurrency: int, total_requests: int, urls: List[str]) -> Dict[str, Any]:
+def run(concurrency: int, per_url: int, urls: List[str]) -> Dict[str, Any]:
     results: List[Dict[str, Any]] = []
     lock = threading.Lock()
+    request_urls = [url for url in urls for _ in range(per_url)]
+    random.shuffle(request_urls)
 
-    def worker_task() -> None:
-        url = random.choice(urls)
-        result = do_request(url)
+    def worker_task(request_url: str) -> None:
+        result = do_request(request_url)
         with lock:
             results.append(result)
 
     exec_start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = [executor.submit(worker_task) for _ in range(total_requests)]
+        futures = [
+            executor.submit(worker_task, request_url) for request_url in request_urls
+        ]
         for future in as_completed(futures):
             future.result()
     exec_end = time.perf_counter()
@@ -348,21 +367,27 @@ if __name__ == "__main__":
         help="一个或多个并发值，依次执行（例如: --concurrency 5 10 20）",
     )
     parser.add_argument(
+        "--per-url",
+        type=int,
+        default=REQUESTS_PER_URL,
+        help="每个 URL 的请求次数",
+    )
+    parser.add_argument(
         "--requests",
         type=int,
-        default=TOTAL_REQUESTS,
-        help="每个并发设置下的请求总数",
+        help="兼容旧参数：等同于 --per-url",
     )
     args = parser.parse_args()
 
     concurrency_values: List[int] = (
         list(args.concurrency) if args.concurrency else list(CONCURRENCY_LIST)
     )
+    per_url = args.requests if args.requests is not None else args.per_url
     summary_timestamp = time.strftime("%Y%m%d_%H%M%S")
     summary_rows: List[Dict[str, Any]] = []
 
     for c in concurrency_values:
-        result = run(c, args.requests, URLS)
+        result = run(c, per_url, URLS)
         summary_rows.append(result["stats_row"])
 
     if len(summary_rows) > 1:

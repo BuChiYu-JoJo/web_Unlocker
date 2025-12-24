@@ -186,6 +186,8 @@ def do_request(url: str) -> Dict[str, Any]:
         payload_json = json.loads(body_text) if body_text else {}
         payload_status = payload_json.get("status_code", "n/a")
         payload_error_code = payload_status if payload_status != 200 else ""
+        body_content = payload_json.get("body")
+        response_size_kb = len(body_text.encode("utf-8")) / 1024 if body_text else 0.0
 
         response_time_field = payload_json.get("response_time")
         if response_time_field is not None:
@@ -194,7 +196,12 @@ def do_request(url: str) -> Dict[str, Any]:
             except (TypeError, ValueError):
                 response_time = duration
 
-        if http_status == 200 and payload_status == 200:
+        if (
+            http_status == 200
+            and payload_status == 200
+            and body_content
+            and response_size_kb > 2.0
+        ):
             success = True
         else:
             if http_status != 200:
@@ -204,6 +211,12 @@ def do_request(url: str) -> Dict[str, Any]:
                 if error_detail is None:
                     error_detail = payload_json
                 error_notes = f"Payload error: {error_detail}"
+            elif not body_content:
+                payload_error_code = "empty_body"
+                error_notes = "Payload error: body is empty"
+            elif response_size_kb <= 2.0:
+                payload_error_code = "response_too_small"
+                error_notes = "Payload error: response size <= 2KB"
     except Exception as exc:
         payload_status = "invalid_json"
         payload_error_code = "invalid_json"
